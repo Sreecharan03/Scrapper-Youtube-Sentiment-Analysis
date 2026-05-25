@@ -1,0 +1,216 @@
+"""
+app/db/init_db.py
+==================
+Database initialisation — creates all collections and indexes on startup.
+Idempotent: safe to call on every startup, existing indexes are no-ops.
+
+INDEX STRATEGY SUMMARY:
+  videos          → video_id (unique)
+  comments        → (video_id, comment_id) unique | video_id | like sort | time sort
+  jobs            → (video_id, status) | status+created | created_at
+  scrape_batches  → (job_id, batch_number) unique | job_id+status
+  scrape_sessions → job_id (unique)
+  comment_history → (comment_id, version) unique | video_id+detected_at
+  failed_replies  → (job_id, comment_id) unique | status+created
+"""
+
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ASCENDING, DESCENDING
+from pymongo.errors import OperationFailure
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# ── Collection name constants ──────────────────────────────────────────────
+VIDEOS_COLLECTION          = "videos"
+COMMENTS_COLLECTION        = "comments"
+JOBS_COLLECTION            = "jobs"
+SCRAPE_BATCHES_COLLECTION  = "scrape_batches"
+SCRAPE_SESSIONS_COLLECTION = "scrape_sessions"
+COMMENT_HISTORY_COLLECTION = "comment_history"
+FAILED_REPLIES_COLLECTION  = "failed_replies"
+
+ALL_COLLECTIONS = [
+    VIDEOS_COLLECTION,
+    COMMENTS_COLLECTION,
+    JOBS_COLLECTION,
+    SCRAPE_BATCHES_COLLECTION,
+    SCRAPE_SESSIONS_COLLECTION,
+    COMMENT_HISTORY_COLLECTION,
+    FAILED_REPLIES_COLLECTION,
+]
+
+
+async def init_db(database: AsyncIOMotorDatabase) -> None:
+    """
+    Create all collections and indexes.
+    Call once at application startup and once in Celery worker startup.
+    """
+    logger.info("db_init_started", database=database.name)
+
+    await _init_videos(database)
+    await _init_comments(database)
+    await _init_jobs(database)
+    await _init_scrape_batches(database)
+    await _init_scrape_sessions(database)
+    await _init_comment_history(database)
+    await _init_failed_replies(database)
+
+    logger.info("db_init_completed", database=database.name)
+
+
+# ── Per-collection initializers ────────────────────────────────────────────
+
+async def _init_videos(db: AsyncIOMotorDatabase) -> None:
+    col = db[VIDEOS_COLLECTION]
+    await col.create_index(
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_video_id_unique", background=True,
+    )
+    await col.create_index(
+        [("scrape_completed", ASCENDING), ("created_at", DESCENDING)],
+        name="idx_incomplete_scrapes", background=True,
+    )
+    logger.debug("indexes_ready", collection=VIDEOS_COLLECTION)
+
+
+async def _safe_create_index(col, keys, *, name: str, **kwargs) -> None:
+    """
+    Create an index, automatically handling the case where a stale index
+    exists with the same name but different keys (OperationFailure code 86).
+    In that case, drop the old index and recreate it.
+    """
+    try:
+        await col.create_index(keys, name=name, **kwargs)
+    except OperationFailure as exc:
+        if exc.code == 86:   # IndexKeySpecsConflict
+            logger.warning(
+                "index_key_conflict_dropping_old",
+                collection=col.name, index=name, error=str(exc),
+            )
+            await col.drop_index(name)
+            await col.create_index(keys, name=name, **kwargs)
+        else:
+            raise
+
+
+async def _init_comments(db: AsyncIOMotorDatabase) -> None:
+    col = db[COMMENTS_COLLECTION]
+
+    # Primary deduplication key — prevents duplicate comments on re-scrape.
+    # insert_many with ordered=False silently skips violations.
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("comment_id", ASCENDING)],
+        unique=True, name="idx_video_comment_unique", background=True,
+    )
+    # Most common query: "get all comments for this video"
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING)],
+        name="idx_video_id", background=True,
+    )
+    # "Top comments" sort
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("like_count", DESCENDING)],
+        name="idx_video_likes", background=True,
+    )
+    # Chronological feed (uses published_at_approx from Phase 2 schema)
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("published_at_approx", DESCENDING)],
+        name="idx_video_published", background=True,
+    )
+    # TLC-only queries (exclude replies)
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("is_reply", ASCENDING)],
+        name="idx_video_is_reply", background=True,
+    )
+    # Re-scrape edit detection: find comments by hash change
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("text_hash", ASCENDING)],
+        name="idx_video_text_hash", background=True,
+    )
+    # Status filter for "not_visible" recovery scans
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("status", ASCENDING)],
+        name="idx_video_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=COMMENTS_COLLECTION)
+
+
+async def _init_jobs(db: AsyncIOMotorDatabase) -> None:
+    col = db[JOBS_COLLECTION]
+    await col.create_index(
+        [("video_id", ASCENDING), ("status", ASCENDING)],
+        name="idx_video_status", background=True,
+    )
+    await col.create_index(
+        [("status", ASCENDING), ("created_at", ASCENDING)],
+        name="idx_status_created", background=True,
+    )
+    await col.create_index(
+        [("created_at", DESCENDING)],
+        name="idx_created_at", background=True,
+    )
+    logger.debug("indexes_ready", collection=JOBS_COLLECTION)
+
+
+async def _init_scrape_batches(db: AsyncIOMotorDatabase) -> None:
+    col = db[SCRAPE_BATCHES_COLLECTION]
+    # Unique per job+batch_number — prevents accidental duplicate batch docs
+    await col.create_index(
+        [("job_id", ASCENDING), ("batch_number", ASCENDING)],
+        unique=True, name="idx_job_batch_unique", background=True,
+    )
+    # "Find all running batches for a job" — used by health-check task
+    await col.create_index(
+        [("job_id", ASCENDING), ("status", ASCENDING)],
+        name="idx_job_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=SCRAPE_BATCHES_COLLECTION)
+
+
+async def _init_scrape_sessions(db: AsyncIOMotorDatabase) -> None:
+    col = db[SCRAPE_SESSIONS_COLLECTION]
+    # One session per job — used by recovery logic
+    await col.create_index(
+        [("job_id", ASCENDING)],
+        unique=True, name="idx_job_id_unique", background=True,
+    )
+    logger.debug("indexes_ready", collection=SCRAPE_SESSIONS_COLLECTION)
+
+
+async def _init_comment_history(db: AsyncIOMotorDatabase) -> None:
+    col = db[COMMENT_HISTORY_COLLECTION]
+    # Each (comment_id, version) pair is unique
+    await col.create_index(
+        [("comment_id", ASCENDING), ("version", ASCENDING)],
+        unique=True, name="idx_comment_version_unique", background=True,
+    )
+    # "Show all edits for a video sorted by detection time"
+    await col.create_index(
+        [("video_id", ASCENDING), ("detected_at", DESCENDING)],
+        name="idx_video_detected_at", background=True,
+    )
+    logger.debug("indexes_ready", collection=COMMENT_HISTORY_COLLECTION)
+
+
+async def _init_failed_replies(db: AsyncIOMotorDatabase) -> None:
+    col = db[FAILED_REPLIES_COLLECTION]
+    # One failed-reply record per (job, comment) pair
+    await col.create_index(
+        [("job_id", ASCENDING), ("comment_id", ASCENDING)],
+        unique=True, name="idx_job_comment_unique", background=True,
+    )
+    # Recovery query: find all pending_retry records across jobs
+    await col.create_index(
+        [("status", ASCENDING), ("created_at", ASCENDING)],
+        name="idx_status_created", background=True,
+    )
+    logger.debug("indexes_ready", collection=FAILED_REPLIES_COLLECTION)

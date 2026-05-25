@@ -1,0 +1,30 @@
+# ============================================================
+# Production dependencies ONLY — nothing dev/test here.
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# --- Web framework ---
+fastapi>=0.112.0
+uvicorn[standard]==0.30.1
+
+# --- MongoDB ---
+motor==3.4.0          # Async MongoDB driver (wraps pymongo)
+pymongo==4.7.2        # Motor's underlying sync driver (keep version locked)
+
+# --- Config & env ---
+pydantic==2.7.1
+pydantic-settings==2.3.0
+python-dotenv==1.0.1
+
+# --- Job queue ---
+celery[redis]==5.4.0
+# hiredis: C extension that speeds up Redis response parsing ~10x.
+# redis-py auto-uses it when installed — zero code changes needed.
+redis[hiredis]==5.0.4
+
+# --- Async HTTP (scraper, Phase 2 ready) ---
+aiohttp==3.9.5
+Brotli==1.1.0          # required by aiohttp to decode YouTube br content-encoding
+
+# --- Logging ---
+structlog==24.2.0

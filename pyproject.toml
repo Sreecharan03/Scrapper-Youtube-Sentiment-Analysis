@@ -1,0 +1,40 @@
+[tool.pytest.ini_options]
+# Where pytest looks for tests
+testpaths = ["tests"]
+# Enable async test support globally
+asyncio_mode = "auto"
+# Verbose output by default
+addopts = "-v --tb=short"
+# Markers we use
+markers = [
+    "unit: Pure logic tests, no I/O",
+    "integration: Tests that require real MongoDB/Redis connections",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.isort]
+known-first-party = ["app"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

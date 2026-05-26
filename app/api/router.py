@@ -10,11 +10,12 @@ WHY THIS EXISTS:
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import comments, jobs, videos
+from app.api.v1.endpoints import comments, jobs, transcripts, videos
 
 api_router = APIRouter(prefix="/api")
 
 # v1 endpoints
-api_router.include_router(jobs.router, prefix="/v1")
-api_router.include_router(comments.router, prefix="/v1")
-api_router.include_router(videos.router, prefix="/v1")
+api_router.include_router(jobs.router,        prefix="/v1")
+api_router.include_router(comments.router,    prefix="/v1")
+api_router.include_router(videos.router,      prefix="/v1")
+api_router.include_router(transcripts.router, prefix="/v1")

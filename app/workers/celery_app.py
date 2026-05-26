@@ -33,10 +33,11 @@ celery_app = Celery(
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=[
-        "app.workers.tasks.scrape_tasks",   # Phase 1 stub (kept for compat)
-        "app.workers.tasks.job_tasks",      # scrape_job_start, finalize_job
-        "app.workers.tasks.tlc_tasks",      # scrape_tlc_batch (self-chaining)
-        "app.workers.tasks.reply_tasks",    # scrape_reply_batch (reply pool)
+        "app.workers.tasks.scrape_tasks",      # Phase 1 stub (kept for compat)
+        "app.workers.tasks.job_tasks",         # scrape_job_start, finalize_job
+        "app.workers.tasks.tlc_tasks",         # scrape_tlc_batch (self-chaining)
+        "app.workers.tasks.reply_tasks",       # scrape_reply_batch (reply pool)
+        "app.workers.tasks.transcript_tasks",  # fetch_transcript (Phase 3A)
     ],
 )
 
@@ -94,6 +95,7 @@ celery_app.conf.update(
         "scrape_tlc_batch":                 {"queue": "scraper"},
         "finalize_job":                     {"queue": "scraper"},
         "scrape_reply_batch":               {"queue": "replies"},
+        "fetch_transcript":                 {"queue": "scraper"},
     },
 
     # Default queue for tasks without explicit routing

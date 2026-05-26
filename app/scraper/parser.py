@@ -119,9 +119,10 @@ def extract_innertube_context(html: str, video_id: str):
     if visitor_match:
         ctx.visitor_data = visitor_match.group(1)
 
-    # ── Extract initial comment continuation token ─────────────────────────
+    # ── Extract comment continuation tokens ──────────────────────────────────
     if yt_initial_data:
         ctx.initial_continuation_token = _find_initial_comment_token(yt_initial_data)
+        ctx.newest_first_token         = _find_newest_first_token(yt_initial_data)
         # Try to get comment count from initial data
         if not ctx.comment_count:
             ctx.comment_count = _extract_comment_count(yt_initial_data)
@@ -239,6 +240,38 @@ def _find_initial_comment_token(data: dict) -> Optional[str]:
         logger.debug("comment_token_found_path3_fallback",
                      token_preview=token[:40])
     return token
+
+
+def _find_newest_first_token(data: dict) -> Optional[str]:
+    """
+    Extract the "Newest First" sort continuation token from ytInitialData.
+
+    This token starts a different comment chain that follows ALL comments in
+    reverse chronological order — unlike "Top Comments" which YouTube caps at
+    a few thousand, this chain can reach the full comment count (e.g. 600k+).
+
+    Location: engagementPanels → engagement-panel-comments-section →
+              sortFilterSubMenuRenderer → subMenuItems[1] (index 1 = Newest First)
+    """
+    for panel in data.get("engagementPanels", []):
+        psr = panel.get("engagementPanelSectionListRenderer", {})
+        if psr.get("panelIdentifier") != "engagement-panel-comments-section":
+            continue
+        token = deep_get(
+            psr,
+            "header",
+            "engagementPanelTitleHeaderRenderer",
+            "menu",
+            "sortFilterSubMenuRenderer",
+            "subMenuItems", 1,          # index 1 = "Newest First"
+            "serviceEndpoint",
+            "continuationCommand",
+            "token",
+        )
+        if token and len(token) > 20:
+            logger.debug("newest_first_token_found", token_preview=token[:40])
+            return token
+    return None
 
 
 def _recursive_token_search(obj: Any, depth: int) -> Optional[str]:

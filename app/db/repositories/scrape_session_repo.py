@@ -23,7 +23,14 @@ class ScrapeSessionRepository(BaseRepository):
         super().__init__(database)
 
     async def create_session(self, session: ScrapeSessionDocument) -> str:
-        return await self.insert_one(session.to_dict())
+        """Upsert — safe to call on retries (won't fail on duplicate job_id)."""
+        doc = session.to_dict()
+        await self._collection.update_one(
+            {"job_id": session.job_id},
+            {"$setOnInsert": doc},
+            upsert=True,
+        )
+        return session.job_id
 
     async def get_session(self, job_id: str) -> Optional[dict]:
         return await self.find_one({"job_id": job_id})

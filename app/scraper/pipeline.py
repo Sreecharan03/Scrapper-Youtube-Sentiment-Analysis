@@ -69,14 +69,18 @@ def make_db_client() -> tuple[AsyncIOMotorClient, AsyncIOMotorDatabase]:
     Each Celery task creates its own client and closes it on completion.
     """
     settings = get_settings()
-    client   = AsyncIOMotorClient(
-        settings.mongodb_uri,
-        serverSelectionTimeoutMS=10_000,
-        connectTimeoutMS=10_000,
-        socketTimeoutMS=30_000,
-        tls=True,
-        tlsAllowInvalidCertificates=settings.mongodb_tls_allow_invalid_certs,
+    # TLS only for Atlas (mongodb+srv://) — local MongoDB doesn't use TLS
+    use_tls = settings.mongodb_uri.startswith("mongodb+srv://")
+    client_kwargs = dict(
+        serverSelectionTimeoutMS=30_000,
+        connectTimeoutMS=20_000,
+        socketTimeoutMS=60_000,
     )
+    if use_tls:
+        client_kwargs["tls"] = True
+        client_kwargs["tlsAllowInvalidCertificates"] = settings.mongodb_tls_allow_invalid_certs
+
+    client   = AsyncIOMotorClient(settings.mongodb_uri, **client_kwargs)
     return client, client[settings.mongodb_db_name]
 
 
@@ -84,26 +88,38 @@ def make_redis_client():
     """
     Create a fresh async Redis client for use inside asyncio.run().
 
-    max_connections=2 because each Celery task owns its own client instance
-    and closes it when the task finishes.  Keeping the pool tiny ensures we
-    don't exhaust the managed Redis connection limit when many tasks run
-    concurrently — each task holds at most 2 connections for the duration of
-    its asyncio event loop.
+    Uses BlockingConnectionPool(max_connections=1) so that concurrent coroutines
+    within the same asyncio.gather() queue up on the single connection instead of
+    raising "Too many connections".  Without blocking=True, the second coroutine
+    to request the connection while the first holds it gets an immediate error.
+
+    max_connections=1 keeps per-task Redis usage to exactly 1 connection regardless
+    of how many chains are running in parallel (asyncio is single-threaded — only
+    one coroutine actually executes at a time, so serialised access is correct).
     """
     import redis.asyncio as aioredis
+    from redis.asyncio import BlockingConnectionPool
     s = get_settings()
-    return aioredis.Redis(
-        host=s.redis_host, port=s.redis_port,
-        db=s.redis_cache_db,
-        username=s.redis_username,
-        password=s.redis_password or None,
-        ssl=s.redis_ssl,
-        decode_responses=True,
-        socket_connect_timeout=10,
-        socket_timeout=10,
-        retry_on_timeout=True,
-        max_connections=2,   # Per-task pool — tasks open/close their own client
+    # Build kwargs — ssl handled separately because BlockingConnectionPool
+    # does not accept ssl= directly; SSLConnection class would be needed for ssl=True.
+    # Our Redis instance uses ssl=False so we simply omit it (plain TCP is default).
+    pool_kwargs = dict(
+        host                   = s.redis_host,
+        port                   = s.redis_port,
+        db                     = s.redis_cache_db,
+        username               = s.redis_username,
+        password               = s.redis_password or None,
+        decode_responses       = True,
+        socket_connect_timeout = 10,
+        socket_timeout         = 10,
+        max_connections        = 1,   # one real connection per task
+        timeout                = 30,  # wait up to 30s for the connection to free up
     )
+    if s.redis_ssl:
+        from redis.asyncio.connection import SSLConnection
+        pool_kwargs["connection_class"] = SSLConnection
+    pool = BlockingConnectionPool(**pool_kwargs)
+    return aioredis.Redis(connection_pool=pool)
 
 
 # ── TLC Batch Runner ───────────────────────────────────────────────────────
@@ -183,16 +199,20 @@ async def run_tlc_batch(
                     accumulator.clear()
 
                     # ── Checkpoint after every successful write ──────────
+                    # write_session_checkpoint only on the first sub-batch
+                    # of each batch — the session doc is for resume only and
+                    # doesn't need to be updated on every 300-comment chunk.
                     await _checkpoint(
-                        job_id        = job_id,
-                        batch_id      = batch_id,
-                        batch_number  = batch_number,
-                        token         = token,
-                        result        = result,
-                        cache         = cache,
-                        session_repo  = session_repo,
-                        batch_repo    = batch_repo,
-                        context       = context,
+                        job_id                   = job_id,
+                        batch_id                 = batch_id,
+                        batch_number             = batch_number,
+                        token                    = token,
+                        result                   = result,
+                        cache                    = cache,
+                        session_repo             = session_repo,
+                        batch_repo               = batch_repo,
+                        context                  = context,
+                        write_session_checkpoint = (result.sub_batches_done == 1),
                     )
 
             # ── Page exhausted check ─────────────────────────────────────
@@ -203,7 +223,7 @@ async def run_tlc_batch(
 
             result.next_token = token
 
-            # Human-like delay between API calls
+            # Delay between TLC API calls (see constants.REQUEST_DELAY_MIN/MAX_MS)
             await scraper.random_delay()
 
     return result
@@ -260,7 +280,8 @@ async def run_reply_batch(
                 break
 
             token = page.next_token
-            await scraper.random_delay()
+            # No delay for replies — each chain uses a unique token and is
+            # far less likely to trigger rate limiting than repeated TLC calls.
 
     return result
 
@@ -394,20 +415,27 @@ async def _write_sub_batch(
 
 async def _checkpoint(
     *,
-    job_id:       str,
-    batch_id:     str,
-    batch_number: int,
-    token:        str,
-    result:       BatchResult,
-    cache:        CacheManager,
-    session_repo: ScrapeSessionRepository,
-    batch_repo:   ScrapeBatchRepository,
-    context:      InnertubeContext,
+    job_id:                  str,
+    batch_id:                str,
+    batch_number:            int,
+    token:                   str,
+    result:                  BatchResult,
+    cache:                   CacheManager,
+    session_repo:            ScrapeSessionRepository,
+    batch_repo:              ScrapeBatchRepository,
+    context:                 InnertubeContext,
+    write_session_checkpoint: bool = True,
 ) -> None:
     """
     Save progress to Redis (fast) and MongoDB (durable) after every sub-batch.
     Order: Redis first (speed), MongoDB second (durability).
     If MongoDB write fails, Redis still has it — next checkpoint will retry.
+
+    write_session_checkpoint controls whether the MongoDB session doc is
+    updated.  The session doc is used only for job resume; writing it on
+    every sub-batch is wasteful.  Callers should set it True only on the
+    first sub-batch of each Celery task (guaranteed durable checkpoint)
+    and False for subsequent sub-batches within the same task.
     """
     now = datetime.now(timezone.utc)
 
@@ -430,16 +458,17 @@ async def _checkpoint(
         current_token      = token,
     )
 
-    # ── MongoDB session doc ────────────────────────────────────────────
-    await session_repo.checkpoint(
-        job_id                  = job_id,
-        token                   = token,
-        token_obtained_at       = context.token_obtained_at
-            if hasattr(context, "token_obtained_at") else now,
-        sub_batch_number        = result.sub_batches_done,
-        comments_written_total  = result.comments_written,
-        current_batch_number    = batch_number,
-    )
+    # ── MongoDB session doc (only when requested) ──────────────────────
+    if write_session_checkpoint:
+        await session_repo.checkpoint(
+            job_id                  = job_id,
+            token                   = token,
+            token_obtained_at       = context.token_obtained_at
+                if hasattr(context, "token_obtained_at") else now,
+            sub_batch_number        = result.sub_batches_done,
+            comments_written_total  = result.comments_written,
+            current_batch_number    = batch_number,
+        )
 
 
 # ── HTTP fetch with retry ──────────────────────────────────────────────────

@@ -94,7 +94,7 @@ async def connect_redis() -> None:
             socket_connect_timeout=10,     # Connection attempt timeout (seconds)
             socket_timeout=10,             # Read/write timeout per command
             retry_on_timeout=True,         # Auto-retry on socket timeout
-            max_connections=5,             # Pool size — kept low for managed Redis
+            max_connections=3,             # Pool size — kept low for managed Redis
             health_check_interval=30,      # Background ping every 30s to keep alive
         )
 

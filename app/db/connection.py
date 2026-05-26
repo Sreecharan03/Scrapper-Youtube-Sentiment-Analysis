@@ -60,18 +60,18 @@ async def connect_db() -> None:
     logger.info("db_connecting", db=settings.mongodb_db_name, env=settings.app_env)
 
     try:
-        _client = AsyncIOMotorClient(
-            settings.mongodb_uri,
-            # Timeout for initial connection attempt (milliseconds)
+        # TLS only for Atlas (mongodb+srv://) — local MongoDB doesn't use TLS
+        use_tls = settings.mongodb_uri.startswith("mongodb+srv://")
+        client_kwargs = dict(
             serverSelectionTimeoutMS=10_000,
-            # Max time to wait for a connection from the pool
             connectTimeoutMS=10_000,
-            # Socket-level timeout for reads/writes
             socketTimeoutMS=30_000,
-            # TLS configuration
-            tls=True,
-            tlsAllowInvalidCertificates=settings.mongodb_tls_allow_invalid_certs,
         )
+        if use_tls:
+            client_kwargs["tls"] = True
+            client_kwargs["tlsAllowInvalidCertificates"] = settings.mongodb_tls_allow_invalid_certs
+
+        _client = AsyncIOMotorClient(settings.mongodb_uri, **client_kwargs)
 
         # Verify the connection is actually alive before declaring success.
         # Motor is lazy — AsyncIOMotorClient() doesn't connect until first use.

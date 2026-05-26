@@ -64,6 +64,7 @@ def _context_to_dict(ctx: InnertubeContext) -> dict:
         "client_version":             ctx.client_version,
         "visitor_data":               ctx.visitor_data,
         "initial_continuation_token": ctx.initial_continuation_token,
+        "newest_first_token":         ctx.newest_first_token,
         "title":                      ctx.title,
         "channel_name":               ctx.channel_name,
         "channel_id":                 ctx.channel_id,
@@ -80,6 +81,7 @@ def _context_from_dict(d: dict) -> InnertubeContext:
         client_version             = d.get("client_version", ""),
         visitor_data               = d.get("visitor_data", ""),
         initial_continuation_token = d.get("initial_continuation_token"),
+        newest_first_token         = d.get("newest_first_token"),
         title                      = d.get("title"),
         channel_name               = d.get("channel_name"),
         channel_id                 = d.get("channel_id"),
@@ -118,7 +120,7 @@ async def _initialise_job(
         async with ScraperSession(video_id) as scraper:
             ctx = await scraper.initialise()
 
-        if not ctx.initial_continuation_token:
+        if not ctx.initial_continuation_token and not ctx.newest_first_token:
             # Video has no comments (disabled or empty)
             # We still complete the job successfully with 0 comments
             await job_repo.mark_completed(job_id, total_scraped=0)
@@ -131,18 +133,30 @@ async def _initialise_job(
             )
             return ctx, ""   # sentinel — caller will check for empty batch_id
 
+        # Prefer "Newest First" token — gives the full comment chain (all comments
+        # in reverse chronological order).  Falls back to "Top Comments" if the
+        # Newest First token was not found on the page (rare, e.g. very new videos).
+        start_token = ctx.newest_first_token or ctx.initial_continuation_token
+
+        logger.info(
+            "job_token_selected",
+            job_id       = job_id,
+            sort_order   = "newest_first" if ctx.newest_first_token else "top_comments",
+            has_nf_token = bool(ctx.newest_first_token),
+        )
+
         # ── 3. Persist session to MongoDB + Redis ─────────────────────────
         session_doc = ScrapeSessionDocument(
             job_id             = job_id,
             video_id           = video_id,
-            current_tlc_token  = ctx.initial_continuation_token,
+            current_tlc_token  = start_token,
             token_obtained_at  = datetime.now(timezone.utc),
             current_batch_number = 1,
         )
         await session_repo.create_session(session_doc)
 
         await cache.set_scraper_session(job_id, {
-            "current_tlc_token":      ctx.initial_continuation_token,
+            "current_tlc_token":      start_token,
             "sub_batch_number":       0,
             "comments_written_total": 0,
             "current_batch_number":   1,
@@ -166,7 +180,7 @@ async def _initialise_job(
         batch_doc = ScrapeBatchDocument(
             job_id        = job_id,
             batch_number  = 1,
-            token_at_start = ctx.initial_continuation_token,
+            token_at_start = start_token,
         )
         batch_id = await batch_repo.create_batch(batch_doc)
 
@@ -196,6 +210,7 @@ async def _initialise_job(
     soft_time_limit  = 120,    # 2 min — only one HTTP fetch needed
     time_limit       = 150,
     acks_late        = True,
+    ignore_result    = True,
 )
 def scrape_job_start(self, *, job_id: str, video_id: str) -> dict:
     """
@@ -224,7 +239,7 @@ def scrape_job_start(self, *, job_id: str, video_id: str) -> dict:
                 "video_id":      video_id,
                 "batch_id":      batch_id,
                 "batch_number":  1,
-                "start_token":   ctx.initial_continuation_token,
+                "start_token":   ctx.newest_first_token or ctx.initial_continuation_token,
                 "context":       _context_to_dict(ctx),
             },
             queue = "scraper",
@@ -261,6 +276,7 @@ def scrape_job_start(self, *, job_id: str, video_id: str) -> dict:
     soft_time_limit = 60,
     time_limit      = 90,
     acks_late       = True,
+    ignore_result   = True,
 )
 def finalize_job(self, *, job_id: str, video_id: str) -> dict:
     """

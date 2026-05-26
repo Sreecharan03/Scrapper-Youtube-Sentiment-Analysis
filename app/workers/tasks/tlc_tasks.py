@@ -53,6 +53,7 @@ from app.db.repositories.job_repo import JobRepository
 from app.db.repositories.scrape_batch_repo import ScrapeBatchRepository
 from app.models.job import JobStatus
 from app.models.scrape_batch import ScrapeBatchDocument
+from app.scraper.constants import REPLY_TASK_BATCH_SIZE
 from app.scraper.pipeline import make_db_client, make_redis_client, run_tlc_batch
 from app.scraper.session import InnertubeContext
 from app.workers.celery_app import celery_app
@@ -72,6 +73,7 @@ logger = get_logger(__name__)
     soft_time_limit  = 1200,   # 20 min per batch (5000 TLCs × ~200 ms)
     time_limit       = 1260,
     acks_late        = True,
+    ignore_result    = True,   # return value unused — self-chaining done inside async fn
 )
 def scrape_tlc_batch(
     self,
@@ -111,11 +113,11 @@ def scrape_tlc_batch(
 
     except ScraperVideoNotFoundError as exc:
         _fail_permanent(job_id, video_id, str(exc))
-        _pause_batch(job_id, batch_id, str(exc), permanent=True)
+        _pause_batch(batch_id, str(exc), permanent=True)
         return {"job_id": job_id, "status": "failed_permanent"}
 
     except ScraperRateLimitError as exc:
-        _pause_batch(job_id, batch_id, str(exc))
+        _pause_batch(batch_id, str(exc))
         asyncio.run(_mark_job_paused_batch(job_id, batch_number, str(exc)))
         return {"job_id": job_id, "status": "paused_rate_limited"}
 
@@ -129,14 +131,14 @@ def scrape_tlc_batch(
             )
             raise self.retry(exc=exc, countdown=backoff)
         # All retries exhausted → pause
-        _pause_batch(job_id, batch_id, str(exc))
+        _pause_batch(batch_id, str(exc))
         asyncio.run(_mark_job_paused_batch(job_id, batch_number, str(exc)))
         return {"job_id": job_id, "status": "paused_retries_exhausted"}
 
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=120)
-        _pause_batch(job_id, batch_id, f"Unexpected error: {exc}")
+        _pause_batch(batch_id, f"Unexpected error: {exc}")
         asyncio.run(_mark_job_paused_batch(job_id, batch_number, str(exc)))
         return {"job_id": job_id, "status": "paused_unexpected_error"}
 
@@ -194,21 +196,41 @@ async def _run_tlc_batch(
             cache        = cache,
         )
 
-        # ── Dispatch reply tasks for tokens found in this batch ───────────
+        # ── Dispatch reply tasks (batched) for tokens found in this batch ──
+        # Group REPLY_TASK_BATCH_SIZE tokens per task so one MongoDB connection
+        # setup is shared across multiple reply chains (asyncio.gather inside).
         reply_tasks_fired = 0
         if result.reply_tokens_found > 0:
             from app.workers.tasks.reply_tasks import scrape_reply_batch  # lazy import
+            token_buffer = []
             for _ in range(result.reply_tokens_found):
                 token_data = await cache.pop_reply_token(job_id)
                 if token_data is None:
                     break
+                token_buffer.append({
+                    "comment_id":  token_data["comment_id"],
+                    "reply_token": token_data["reply_token"],
+                })
+                if len(token_buffer) >= REPLY_TASK_BATCH_SIZE:
+                    scrape_reply_batch.apply_async(
+                        kwargs={
+                            "job_id":   job_id,
+                            "video_id": video_id,
+                            "tokens":   token_buffer,
+                            "context":  _context_to_dict(context),
+                        },
+                        queue = "replies",
+                    )
+                    reply_tasks_fired += 1
+                    token_buffer = []
+            # Dispatch any remaining tokens (last partial batch)
+            if token_buffer:
                 scrape_reply_batch.apply_async(
                     kwargs={
-                        "job_id":      job_id,
-                        "video_id":    video_id,
-                        "comment_id":  token_data["comment_id"],
-                        "reply_token": token_data["reply_token"],
-                        "context":     _context_to_dict(context),
+                        "job_id":   job_id,
+                        "video_id": video_id,
+                        "tokens":   token_buffer,
+                        "context":  _context_to_dict(context),
                     },
                     queue = "replies",
                 )

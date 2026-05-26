@@ -26,8 +26,21 @@ class ScrapeBatchRepository(BaseRepository):
     # ── Write ──────────────────────────────────────────────────────────────
 
     async def create_batch(self, batch: ScrapeBatchDocument) -> str:
-        """Insert a new batch document. Returns MongoDB _id string."""
-        return await self.insert_one(batch.to_dict())
+        """Upsert batch document — safe to call on task retries."""
+        doc = batch.to_dict()
+        result = await self._collection.update_one(
+            {"job_id": batch.job_id, "batch_number": batch.batch_number},
+            {"$setOnInsert": doc},
+            upsert=True,
+        )
+        if result.upserted_id:
+            return str(result.upserted_id)
+        # Already existed — return its _id
+        existing = await self._collection.find_one(
+            {"job_id": batch.job_id, "batch_number": batch.batch_number},
+            {"_id": 1},
+        )
+        return str(existing["_id"])
 
     async def mark_running(self, batch_id: str, celery_task_id: str, worker: str) -> None:
         await self.update_one(

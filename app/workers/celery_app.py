@@ -48,15 +48,17 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 
     # ── Redis connection pool limits ───────────────────────────────────────
-    # Managed Redis services have hard limits (e.g. 30-100 connections).
-    # We cap every pool explicitly so the sum of all consumers stays safe:
-    #   broker_pool_limit=3   → kombu broker transport pool
-    #   redis_max_connections=5 → result backend pool
-    #   FastAPI app pool      → max_connections=5 (redis_client.py)
-    #   per-task client       → max_connections=2 (pipeline.make_redis_client)
-    # Worst case with --concurrency=2:  3 + 5 + 5 + (2×2) = 17 connections
-    broker_pool_limit=3,          # kombu Redis broker connection pool
-    redis_max_connections=5,      # Celery result backend pool
+    # Redis Cloud free tier hard limit: 30 connections (confirmed via INFO).
+    # ALL tasks use ignore_result=True — no result backend writes at all.
+    # This eliminates per-ForkPoolWorker result connections (the main culprit).
+    #
+    # Budget with single combined worker (concurrency=6) + FastAPI:
+    #   worker base (broker + consumer + control + heartbeat): ~7
+    #   per-task pipeline.make_redis_client (c=6 × 1):          6
+    #   FastAPI app pool:                                        3
+    #   Total:                                                  ~16  (14 under limit)
+    broker_pool_limit=2,          # kombu Redis broker connection pool
+    redis_max_connections=2,      # result backend pool (minimal — results ignored)
 
     # Serialization — JSON is human-readable and language-agnostic
     task_serializer="json",

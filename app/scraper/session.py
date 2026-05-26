@@ -45,7 +45,8 @@ class InnertubeContext:
     api_key:        str   = YT_API_KEY_FALLBACK
     client_version: str   = YT_CLIENT_VERSION_FALLBACK
     visitor_data:   str   = ""
-    initial_continuation_token: Optional[str] = None
+    initial_continuation_token: Optional[str] = None   # "Top Comments" sort
+    newest_first_token:         Optional[str] = None   # "Newest First" sort — gives ALL comments
     # Video metadata extracted from ytInitialPlayerResponse
     title:          Optional[str] = None
     channel_name:   Optional[str] = None
@@ -88,8 +89,8 @@ class ScraperSession:
     async def __aexit__(self, *_) -> None:
         if self._session and not self._session.closed:
             await self._session.close()
-            # Give the connector time to cleanly close SSL connections
-            await asyncio.sleep(0.25)
+            # Brief pause for SSL connection teardown (reduced from 0.25s)
+            await asyncio.sleep(0.05)
 
     async def initialise(self) -> InnertubeContext:
         """

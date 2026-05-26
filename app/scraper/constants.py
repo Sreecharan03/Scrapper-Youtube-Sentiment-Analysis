@@ -49,9 +49,11 @@ INNERTUBE_POST_HEADERS = {
 }
 
 # ── Scraping behaviour ─────────────────────────────────────────────────────
-# Random delay range between API calls (milliseconds) — appear more human
-REQUEST_DELAY_MIN_MS  = 400
-REQUEST_DELAY_MAX_MS  = 800
+# Random delay range between API calls (milliseconds).
+# TLC scraping uses this range.  Reply scraping skips the delay entirely
+# (each reply chain uses a unique token — not repetitive on the same endpoint).
+REQUEST_DELAY_MIN_MS  = 50
+REQUEST_DELAY_MAX_MS  = 100
 
 # HTTP timeouts (seconds)
 CONNECT_TIMEOUT = 15
@@ -65,8 +67,9 @@ MAX_REPLY_RETRIES   = 3
 RATE_LIMIT_BACKOFF  = [60, 120, 240]
 
 # Sub-batch / batch sizes
-SUB_BATCH_SIZE  = 100    # comments per MongoDB write
-BATCH_SIZE      = 5_000  # comments per Celery task
+SUB_BATCH_SIZE       = 1000   # comments per MongoDB write
+BATCH_SIZE           = 5_000  # TLCs per Celery TLC batch task
+REPLY_TASK_BATCH_SIZE = 25    # reply chains processed per Celery reply task
 
 # YouTube comments per API response page (internal API always returns ~20)
 YT_PAGE_SIZE = 20

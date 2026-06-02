@@ -31,3 +31,6 @@ structlog==24.2.0
 
 # --- Transcript (Phase 3A) ---
 youtube-transcript-api==1.2.4   # fetches YT captions in any language, no API key needed
+
+# --- LLM Summary (Phase 3A) ---
+anthropic>=0.105.0              # Claude Haiku — summary generation with prompt caching

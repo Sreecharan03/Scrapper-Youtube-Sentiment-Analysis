@@ -38,6 +38,7 @@ celery_app = Celery(
         "app.workers.tasks.tlc_tasks",         # scrape_tlc_batch (self-chaining)
         "app.workers.tasks.reply_tasks",       # scrape_reply_batch (reply pool)
         "app.workers.tasks.transcript_tasks",  # fetch_transcript (Phase 3A)
+        "app.workers.tasks.summary_tasks",     # generate_summary (Phase 3A LLM)
     ],
 )
 
@@ -96,6 +97,7 @@ celery_app.conf.update(
         "finalize_job":                     {"queue": "scraper"},
         "scrape_reply_batch":               {"queue": "replies"},
         "fetch_transcript":                 {"queue": "scraper"},
+        "generate_summary":                 {"queue": "scraper"},
     },
 
     # Default queue for tasks without explicit routing

@@ -126,6 +126,18 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
 
     # ------------------------------------------------------------------ #
+    # LLM (Phase 3 — summary generation)                                  #
+    # ------------------------------------------------------------------ #
+    anthropic_api_key: str = Field(
+        default="",
+        description="Anthropic API key for Claude Haiku summary generation",
+    )
+    anthropic_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Claude model ID to use for summary generation",
+    )
+
+    # ------------------------------------------------------------------ #
     # Scraper (Phase 2 — declared now so config is never patched later)   #
     # ------------------------------------------------------------------ #
     scraper_max_concurrent_requests: int = Field(

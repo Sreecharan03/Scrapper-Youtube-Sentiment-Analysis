@@ -31,6 +31,7 @@ SCRAPE_SESSIONS_COLLECTION = "scrape_sessions"
 COMMENT_HISTORY_COLLECTION = "comment_history"
 FAILED_REPLIES_COLLECTION  = "failed_replies"
 TRANSCRIPTS_COLLECTION     = "transcripts"
+SUMMARIES_COLLECTION       = "summaries"
 
 ALL_COLLECTIONS = [
     VIDEOS_COLLECTION,
@@ -41,6 +42,7 @@ ALL_COLLECTIONS = [
     COMMENT_HISTORY_COLLECTION,
     FAILED_REPLIES_COLLECTION,
     TRANSCRIPTS_COLLECTION,
+    SUMMARIES_COLLECTION,
 ]
 
 
@@ -59,6 +61,7 @@ async def init_db(database: AsyncIOMotorDatabase) -> None:
     await _init_comment_history(database)
     await _init_failed_replies(database)
     await _init_transcripts(database)
+    await _init_summaries(database)
 
     logger.info("db_init_completed", database=database.name)
 
@@ -217,6 +220,19 @@ async def _init_transcripts(db: AsyncIOMotorDatabase) -> None:
         name="idx_transcript_status", background=True,
     )
     logger.debug("indexes_ready", collection=TRANSCRIPTS_COLLECTION)
+
+
+async def _init_summaries(db: AsyncIOMotorDatabase) -> None:
+    col = db[SUMMARIES_COLLECTION]
+    await col.create_index(
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_summary_video_unique", background=True,
+    )
+    await col.create_index(
+        [("status", ASCENDING)],
+        name="idx_summary_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=SUMMARIES_COLLECTION)
 
 
 async def _init_failed_replies(db: AsyncIOMotorDatabase) -> None:

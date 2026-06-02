@@ -59,3 +59,4 @@ comments_*.json
 .wget-hsts
 .vscode-server
 .windsurf-server
+.mongodb/

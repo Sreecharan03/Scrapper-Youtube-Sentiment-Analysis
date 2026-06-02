@@ -89,6 +89,7 @@ def generate_summary(self, *, video_id: str) -> dict:
             transcript_text = transcript_text,
             duration_secs   = duration_secs,
             video_title     = video_title,
+            segments        = segments,   # pass raw segments for accurate timestamps
         )
 
         # ── Store result ──────────────────────────────────────────────────

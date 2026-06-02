@@ -268,8 +268,10 @@ COMPLETENESS: Re-read the transcript. List any named people, brands, prizes, or 
 explicit numbers that are MISSING from named_entities.
 
 TIMESTAMP COVERAGE: The video is {duration_secs:.0f} seconds ({duration_ms} ms) long. \
-Do your emotional_arc and key_topics timestamps cover the full duration without gaps? \
-Do the end timestamps of the last entries match or approach {duration_ms}?
+RULE: The final entry in BOTH key_topics AND emotional_arc MUST have end_ms = {duration_ms}. \
+No exceptions. If your last entry ends before {duration_ms}, extend it or add a new entry \
+covering the remaining time up to exactly {duration_ms}. \
+Also check there are no gaps between consecutive entries.
 
 HUMOR PRECISION: Are humor_moments genuinely funny incidents, or just casual chat? \
 List any that are misclassified.
@@ -371,6 +373,7 @@ class SummaryService:
         transcript_text: str,
         duration_secs:   float = 0.0,
         video_title:     Optional[str] = None,
+        segments:        Optional[list] = None,
     ) -> dict:
         """
         Full two-call pipeline:
@@ -383,13 +386,39 @@ class SummaryService:
             transcript_text: Full transcript as plain text (segments joined by space).
             duration_secs:   Total video duration — used in critique for timestamp checks.
             video_title:     Optional title for context injection.
+            segments:        Raw segment list [{start_ms, end_ms, text}].
+                             When provided, timestamps are embedded in the transcript
+                             so the model can produce accurate start/end_ms values.
         """
         duration_ms = int(duration_secs * 1000)
 
-        context_prefix = (
-            f'Video title: "{video_title}"\n' if video_title else ""
-        )
-        full_transcript = context_prefix + transcript_text
+        # Build timestamped transcript if segments provided.
+        # Format: "[0s] text ... [30s] text ..."
+        # This lets the model read actual timestamps instead of guessing.
+        if segments:
+            lines = [
+                f"[{int(s['start_ms'] / 1000)}s] {s['text']}"
+                for s in segments
+            ]
+            # Sample every 3rd segment to keep token count similar to plain text
+            # (full timestamped transcript would be ~2x longer)
+            sampled = lines[::3]
+            timestamped = " ".join(sampled)
+            context_prefix = (
+                f'Video title: "{video_title}"\n'
+                f'Total duration: {int(duration_secs)}s\n'
+                f'Timestamps below are REAL seconds from video start — use them for your JSON output.\n\n'
+                if video_title else
+                f'Total duration: {int(duration_secs)}s\n'
+                f'Timestamps below are REAL seconds from video start — use them for your JSON output.\n\n'
+            )
+            full_transcript = context_prefix + timestamped
+        else:
+            context_prefix = (
+                f'Video title: "{video_title}"\nTotal duration: {int(duration_secs)}s\n'
+                if video_title else f'Total duration: {int(duration_secs)}s\n'
+            )
+            full_transcript = context_prefix + transcript_text
 
         t0 = time.perf_counter()
 
@@ -471,6 +500,14 @@ class SummaryService:
         critique_text = critique_response.content[0].text
         critique_notes = _extract_critique(critique_text)
         refined_dict   = _extract_json(critique_text)
+
+        # Hard clamp: ensure last key_topic and emotional_arc entry reach duration_ms.
+        # The model may stop short even after being told not to.
+        if duration_ms > 0:
+            for field in ("key_topics", "emotional_arc"):
+                entries = refined_dict.get(field)
+                if entries:
+                    entries[-1]["end_ms"] = duration_ms
 
         call2_usage = critique_response.usage
         elapsed = time.perf_counter() - t0

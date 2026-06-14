@@ -30,8 +30,9 @@ SCRAPE_BATCHES_COLLECTION  = "scrape_batches"
 SCRAPE_SESSIONS_COLLECTION = "scrape_sessions"
 COMMENT_HISTORY_COLLECTION = "comment_history"
 FAILED_REPLIES_COLLECTION  = "failed_replies"
-TRANSCRIPTS_COLLECTION     = "transcripts"
-SUMMARIES_COLLECTION       = "summaries"
+TRANSCRIPTS_COLLECTION       = "transcripts"
+SUMMARIES_COLLECTION         = "summaries"
+COMMENT_ANALYSIS_COLLECTION  = "comment_analysis"
 
 ALL_COLLECTIONS = [
     VIDEOS_COLLECTION,
@@ -43,6 +44,7 @@ ALL_COLLECTIONS = [
     FAILED_REPLIES_COLLECTION,
     TRANSCRIPTS_COLLECTION,
     SUMMARIES_COLLECTION,
+    COMMENT_ANALYSIS_COLLECTION,
 ]
 
 
@@ -62,6 +64,7 @@ async def init_db(database: AsyncIOMotorDatabase) -> None:
     await _init_failed_replies(database)
     await _init_transcripts(database)
     await _init_summaries(database)
+    await _init_comment_analysis(database)
 
     logger.info("db_init_completed", database=database.name)
 
@@ -146,6 +149,18 @@ async def _init_comments(db: AsyncIOMotorDatabase) -> None:
         col,
         [("video_id", ASCENDING), ("status", ASCENDING)],
         name="idx_video_status", background=True,
+    )
+    # Phase 3B: filter by intent label — "get all questions for a video"
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("intent_labels", ASCENDING)],
+        name="idx_video_intent_labels", background=True,
+    )
+    # Phase 3B: filter by classification status — resume incomplete runs
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("classification_status", ASCENDING)],
+        name="idx_video_classification_status", background=True,
     )
     logger.debug("indexes_ready", collection=COMMENTS_COLLECTION)
 
@@ -233,6 +248,23 @@ async def _init_summaries(db: AsyncIOMotorDatabase) -> None:
         name="idx_summary_status", background=True,
     )
     logger.debug("indexes_ready", collection=SUMMARIES_COLLECTION)
+
+
+async def _init_comment_analysis(db: AsyncIOMotorDatabase) -> None:
+    col = db[COMMENT_ANALYSIS_COLLECTION]
+    # One document per video — video_id is the primary lookup key
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_comment_analysis_video_unique", background=True,
+    )
+    # Filter by status — "find all processing jobs for monitoring"
+    await _safe_create_index(
+        col,
+        [("status", ASCENDING)],
+        name="idx_comment_analysis_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=COMMENT_ANALYSIS_COLLECTION)
 
 
 async def _init_failed_replies(db: AsyncIOMotorDatabase) -> None:

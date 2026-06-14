@@ -37,8 +37,10 @@ logs/
 htmlcov/
 .tox/
 
-# Exported data files
+# Exported data / client deliverables
 comments_*.json
+analysis_*.json
+*.docx
 
 # Lightning AI studio internals
 .lightning_studio/

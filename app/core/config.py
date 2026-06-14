@@ -138,6 +138,18 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ #
+    # Comment Classification (Phase 3B)                                   #
+    # ------------------------------------------------------------------ #
+    groq_api_key: str = Field(
+        default="",
+        description="Groq API key for comment classification",
+    )
+    groq_model: str = Field(
+        default="llama-3.1-8b-instant",
+        description="Groq model ID for comment classification",
+    )
+
+    # ------------------------------------------------------------------ #
     # Scraper (Phase 2 — declared now so config is never patched later)   #
     # ------------------------------------------------------------------ #
     scraper_max_concurrent_requests: int = Field(

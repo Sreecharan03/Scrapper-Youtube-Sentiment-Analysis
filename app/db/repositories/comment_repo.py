@@ -108,3 +108,103 @@ class CommentRepository(BaseRepository):
     async def comment_exists(self, comment_id: str, video_id: str) -> bool:
         """Check for a specific comment — used to avoid duplicate scraping."""
         return await self.exists({"comment_id": comment_id, "video_id": video_id})
+
+    async def get_all_for_classification(self, video_id: str) -> list[dict]:
+        """
+        Load all comments for a video for classification.
+        Minimal projection — only fields needed by the classifier.
+        Returns unbounded list (no pagination) — classification always needs all comments.
+        """
+        cursor = self._collection.find(
+            {"video_id": video_id},
+            {
+                "comment_id":        1,
+                "text":              1,
+                "is_reply":          1,
+                "parent_comment_id": 1,
+                "_id":               0,
+            },
+        )
+        return await cursor.to_list(None)
+
+    async def get_failed_for_classification(self, video_id: str) -> list[dict]:
+        """Load only comments that failed classification — for retry runs."""
+        cursor = self._collection.find(
+            {"video_id": video_id, "classification_status": "failed"},
+            {
+                "comment_id":        1,
+                "text":              1,
+                "is_reply":          1,
+                "parent_comment_id": 1,
+                "_id":               0,
+            },
+        )
+        return await cursor.to_list(None)
+
+    async def get_classification_counts(self, video_id: str) -> dict:
+        """Count comments by classification_status for aggregate recomputation."""
+        pipeline = [
+            {"$match": {"video_id": video_id, "classification_status": "done"}},
+            {"$group": {
+                "_id": None,
+                "sentiments":     {"$push": "$sentiment"},
+                "intent_labels":  {"$push": "$intent_labels"},
+                "total_done":     {"$sum": 1},
+            }},
+        ]
+        results = await self._collection.aggregate(pipeline).to_list(1)
+        return results[0] if results else {}
+
+    async def bulk_update_classifications(
+        self,
+        video_id: str,
+        results: list[dict],
+    ) -> int:
+        """
+        Bulk update comment docs with classification results using unordered bulk_write.
+        Unordered = maximum throughput; individual failures don't stop the batch.
+
+        Returns:
+            Number of documents modified.
+        """
+        from pymongo import UpdateOne
+
+        if not results:
+            return 0
+
+        ops = []
+        for r in results:
+            cid    = r["comment_id"]
+            status = r.get("classification_status", "done")
+
+            if status == "done":
+                set_fields: dict = {
+                    "intent_labels":             r.get("intent_labels", []),
+                    "sentiment":                 r.get("sentiment", "neutral"),
+                    "classification_confidence": r.get("classification_confidence", 0.0),
+                    "classification_status":     "done",
+                    "classified_at":             r.get("classified_at"),
+                    "classification_version":    r.get("classification_version", "v1"),
+                }
+                if "answered_by_video" in r:
+                    set_fields["answered_by_video"] = r["answered_by_video"]
+            else:
+                set_fields = {
+                    "classification_status":  status,
+                    "classified_at":          r.get("classified_at"),
+                    "classification_version": r.get("classification_version", "v1"),
+                }
+
+            ops.append(UpdateOne(
+                {"comment_id": cid, "video_id": video_id},
+                {"$set": set_fields},
+            ))
+
+        result = await self._collection.bulk_write(ops, ordered=False)
+        logger.info(
+            "comments_classifications_bulk_written",
+            video_id=video_id,
+            total_ops=len(ops),
+            modified=result.modified_count,
+        )
+        return result.modified_count

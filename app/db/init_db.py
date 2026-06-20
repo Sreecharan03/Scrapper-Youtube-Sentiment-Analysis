@@ -33,6 +33,10 @@ FAILED_REPLIES_COLLECTION  = "failed_replies"
 TRANSCRIPTS_COLLECTION       = "transcripts"
 SUMMARIES_COLLECTION         = "summaries"
 COMMENT_ANALYSIS_COLLECTION  = "comment_analysis"
+CLUSTERS_COLLECTION          = "clusters"
+CLUSTER_INFO_COLLECTION      = "cluster_info"
+RECOMMENDATIONS_COLLECTION   = "recommendations"
+INTENT_SUMMARIES_COLLECTION  = "intent_summaries"
 
 ALL_COLLECTIONS = [
     VIDEOS_COLLECTION,
@@ -45,6 +49,10 @@ ALL_COLLECTIONS = [
     TRANSCRIPTS_COLLECTION,
     SUMMARIES_COLLECTION,
     COMMENT_ANALYSIS_COLLECTION,
+    CLUSTERS_COLLECTION,
+    CLUSTER_INFO_COLLECTION,
+    RECOMMENDATIONS_COLLECTION,
+    INTENT_SUMMARIES_COLLECTION,
 ]
 
 
@@ -65,6 +73,10 @@ async def init_db(database: AsyncIOMotorDatabase) -> None:
     await _init_transcripts(database)
     await _init_summaries(database)
     await _init_comment_analysis(database)
+    await _init_clusters(database)
+    await _init_cluster_info(database)
+    await _init_recommendations(database)
+    await _init_intent_summaries(database)
 
     logger.info("db_init_completed", database=database.name)
 
@@ -265,6 +277,61 @@ async def _init_comment_analysis(db: AsyncIOMotorDatabase) -> None:
         name="idx_comment_analysis_status", background=True,
     )
     logger.debug("indexes_ready", collection=COMMENT_ANALYSIS_COLLECTION)
+
+
+async def _init_clusters(db: AsyncIOMotorDatabase) -> None:
+    col = db[CLUSTERS_COLLECTION]
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("cluster_id", ASCENDING)],
+        unique=True, name="idx_clusters_video_cluster_unique", background=True,
+    )
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING), ("is_content_gap", ASCENDING)],
+        name="idx_clusters_gap_filter", background=True,
+    )
+    logger.debug("indexes_ready", collection=CLUSTERS_COLLECTION)
+
+
+async def _init_cluster_info(db: AsyncIOMotorDatabase) -> None:
+    col = db[CLUSTER_INFO_COLLECTION]
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_cluster_info_video_unique", background=True,
+    )
+    logger.debug("indexes_ready", collection=CLUSTER_INFO_COLLECTION)
+
+
+async def _init_intent_summaries(db: AsyncIOMotorDatabase) -> None:
+    col = db[INTENT_SUMMARIES_COLLECTION]
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_intent_summaries_video_unique", background=True,
+    )
+    await _safe_create_index(
+        col,
+        [("status", ASCENDING)],
+        name="idx_intent_summaries_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=INTENT_SUMMARIES_COLLECTION)
+
+
+async def _init_recommendations(db: AsyncIOMotorDatabase) -> None:
+    col = db[RECOMMENDATIONS_COLLECTION]
+    await _safe_create_index(
+        col,
+        [("video_id", ASCENDING)],
+        unique=True, name="idx_recommendations_video_unique", background=True,
+    )
+    await _safe_create_index(
+        col,
+        [("status", ASCENDING)],
+        name="idx_recommendations_status", background=True,
+    )
+    logger.debug("indexes_ready", collection=RECOMMENDATIONS_COLLECTION)
 
 
 async def _init_failed_replies(db: AsyncIOMotorDatabase) -> None:

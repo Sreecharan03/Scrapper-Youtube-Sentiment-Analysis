@@ -40,6 +40,9 @@ celery_app = Celery(
         "app.workers.tasks.transcript_tasks",      # fetch_transcript (Phase 3A)
         "app.workers.tasks.summary_tasks",         # generate_summary (Phase 3A LLM)
         "app.workers.tasks.classification_tasks",  # classify_comments (Phase 3B)
+        "app.workers.tasks.clustering_tasks",          # cluster_comments (Phase 3C)
+        "app.workers.tasks.recommendation_tasks",      # generate_recommendations (Phase 3D)
+        "app.workers.tasks.intent_summary_tasks",      # generate_intent_summaries (Phase 3E)
     ],
 )
 
@@ -100,6 +103,9 @@ celery_app.conf.update(
         "fetch_transcript":                 {"queue": "scraper"},
         "generate_summary":                 {"queue": "scraper"},
         "classify_comments":                {"queue": "scraper"},
+        "cluster_comments":                 {"queue": "scraper"},
+        "generate_recommendations":         {"queue": "scraper"},
+        "generate_intent_summaries":        {"queue": "scraper"},
     },
 
     # Default queue for tasks without explicit routing

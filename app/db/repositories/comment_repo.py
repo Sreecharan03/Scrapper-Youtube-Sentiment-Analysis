@@ -127,6 +127,58 @@ class CommentRepository(BaseRepository):
         )
         return await cursor.to_list(None)
 
+    async def get_comments_for_clustering(self, video_id: str) -> list[dict]:
+        """
+        Load all classified comments for Phase 3C clustering.
+        Includes text_hash (dedup), like_count (reply filter), author_channel_id (bot detection),
+        intent_labels + sentiment (breakdown computation), and parent_comment_id (assignment fallback).
+        """
+        cursor = self._collection.find(
+            {"video_id": video_id, "classification_status": "done"},
+            {
+                "comment_id":        1,
+                "text":              1,
+                "text_hash":         1,
+                "is_reply":          1,
+                "parent_comment_id": 1,
+                "like_count":        1,
+                "author_name":       1,
+                "author_channel_id": 1,
+                "intent_labels":     1,
+                "sentiment":         1,
+                "answered_by_video": 1,
+                "classification_status": 1,
+                "_id":               0,
+            },
+        )
+        return await cursor.to_list(None)
+
+    async def bulk_update_cluster_ids(
+        self,
+        video_id:    str,
+        assignments: dict,  # {comment_id: cluster_id}
+    ) -> int:
+        """Bulk-write cluster_id field onto each comment doc."""
+        from pymongo import UpdateOne
+
+        if not assignments:
+            return 0
+
+        ops = [
+            UpdateOne(
+                {"comment_id": cid, "video_id": video_id},
+                {"$set": {"cluster_id": cluster_id}},
+            )
+            for cid, cluster_id in assignments.items()
+        ]
+        result = await self._collection.bulk_write(ops, ordered=False)
+        logger.info(
+            "cluster_ids_written",
+            video_id=video_id,
+            modified=result.modified_count,
+        )
+        return result.modified_count
+
     async def get_failed_for_classification(self, video_id: str) -> list[dict]:
         """Load only comments that failed classification — for retry runs."""
         cursor = self._collection.find(
@@ -208,3 +260,67 @@ class CommentRepository(BaseRepository):
             modified=result.modified_count,
         )
         return result.modified_count
+
+    async def get_misconception_comments(self, video_id: str) -> list[dict]:
+        """Load all classified misconception-labeled comments with cluster assignment."""
+        cursor = self._collection.find(
+            {
+                "video_id":              video_id,
+                "classification_status": "done",
+                "intent_labels":         "misconception",
+            },
+            {
+                "comment_id": 1,
+                "text":       1,
+                "like_count": 1,
+                "cluster_id": 1,
+                "_id":        0,
+            },
+        )
+        return await cursor.to_list(None)
+
+    async def get_unanswered_questions(self, video_id: str) -> list[dict]:
+        """Load unanswered question comments sorted by like_count descending."""
+        cursor = self._collection.find(
+            {
+                "video_id":              video_id,
+                "classification_status": "done",
+                "intent_labels":         "question",
+                "answered_by_video":     False,
+            },
+            {
+                "comment_id": 1,
+                "text":       1,
+                "like_count": 1,
+                "cluster_id": 1,
+                "_id":        0,
+            },
+        ).sort("like_count", -1)
+        return await cursor.to_list(None)
+
+    async def get_top_comments_by_intent(
+        self,
+        video_id: str,
+        intent:   str,
+        limit:    int = 8,
+    ) -> list[dict]:
+        """Top comments for a given intent label, sorted by like_count."""
+        cursor = self._collection.find(
+            {
+                "video_id":              video_id,
+                "classification_status": "done",
+                "intent_labels":         intent,
+            },
+            {"comment_id": 1, "text": 1, "like_count": 1, "cluster_id": 1, "_id": 0},
+        ).sort("like_count", -1).limit(limit)
+        return await cursor.to_list(None)
+
+    async def get_intent_counts(self, video_id: str) -> dict:
+        """Count of comments per intent label for a video."""
+        pipeline = [
+            {"$match": {"video_id": video_id, "classification_status": "done"}},
+            {"$unwind": "$intent_labels"},
+            {"$group": {"_id": "$intent_labels", "count": {"$sum": 1}}},
+        ]
+        rows = await self._collection.aggregate(pipeline).to_list(None)
+        return {row["_id"]: row["count"] for row in rows}

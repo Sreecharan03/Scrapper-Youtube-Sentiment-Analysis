@@ -4,8 +4,9 @@ app/api/v1/schemas/recommendations.py
 Pydantic v2 schemas for Phase 3D recommendation endpoints.
 """
 
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -67,6 +68,16 @@ class UnansweredItem(BaseModel):
     cluster_label: str
 
 
+class VideoIdeaItem(BaseModel):
+    rank:           int
+    title:          str
+    demand_score:   int
+    confidence_pct: int
+    why:            str
+    evidence_count: int
+    format:         str
+
+
 class RecommendationTriggerResponse(BaseModel):
     video_id: str
     status:   str
@@ -74,11 +85,20 @@ class RecommendationTriggerResponse(BaseModel):
 
 
 class RecommendationsResponse(BaseModel):
-    video_id:              str
-    status:                str
-    generated_at:          Optional[datetime]
-    content_gaps:          list[ContentGapItem]
-    misconceptions:        list[MisconceptionItem]
-    controversy_hotspots:  list[ControversyItem]
-    unanswered_questions:  list[UnansweredItem]
-    error:                 Optional[str] = None
+    video_id:               str
+    status:                 str
+    generated_at:           Optional[datetime]
+    # Strategic layer
+    executive_summary:       str                  = ""
+    audience_stage:          str                  = ""
+    audience_mood:           str                  = ""
+    top_video_ideas:         list[VideoIdeaItem]  = []
+    purchase_intent_signals: list[str]            = []
+    content_series:          list[str]            = []
+    risk_alerts:             list[str]            = []
+    # Analysis types
+    content_gaps:            list[ContentGapItem]
+    misconceptions:          list[MisconceptionItem]
+    controversy_hotspots:    list[ControversyItem]
+    unanswered_questions:    list[UnansweredItem]
+    error:                   Optional[str]        = None

@@ -88,9 +88,10 @@ async def _generate_async(video_id: str) -> None:
         await rec_repo.mark_processing(video_id)
 
         # ── Load data ─────────────────────────────────────────────────────
-        clusters              = await cluster_repo.get_clusters(video_id)
+        clusters               = await cluster_repo.get_clusters(video_id)
         misconception_comments = await comment_repo.get_misconception_comments(video_id)
-        unanswered_comments   = await comment_repo.get_unanswered_questions(video_id)
+        unanswered_comments    = await comment_repo.get_unanswered_questions(video_id)
+        intent_counts          = await comment_repo.get_intent_counts(video_id)
 
         logger.info(
             "recommendations_data_loaded",
@@ -98,30 +99,39 @@ async def _generate_async(video_id: str) -> None:
             clusters=len(clusters),
             misconceptions=len(misconception_comments),
             unanswered=len(unanswered_comments),
+            intents=len(intent_counts),
         )
 
         # ── Generate ──────────────────────────────────────────────────────
         service = RecommendationService(
-            api_key = settings.groq_api_key,
-            model   = settings.groq_model,
+            api_key          = settings.groq_api_key,
+            model            = settings.groq_model,
+            strategic_model  = settings.groq_strategic_model,
         )
         result = await service.generate(
             clusters               = clusters,
             summary                = summary,
             misconception_comments = misconception_comments,
             unanswered_comments    = unanswered_comments,
+            intent_counts          = intent_counts,
         )
 
         # ── Persist ───────────────────────────────────────────────────────
         def _serialize_item(item) -> dict:
-            d = asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
-            return d
+            return asdict(item) if hasattr(item, "__dataclass_fields__") else dict(item)
 
         await rec_repo.mark_completed(video_id, {
-            "content_gaps":         [_serialize_item(g) for g in result.content_gaps],
-            "misconceptions":       [_serialize_item(m) for m in result.misconceptions],
-            "controversy_hotspots": [_serialize_item(c) for c in result.controversy_hotspots],
-            "unanswered_questions": [_serialize_item(q) for q in result.unanswered_questions],
+            "executive_summary":       result.executive_summary,
+            "audience_stage":          result.audience_stage,
+            "audience_mood":           result.audience_mood,
+            "top_video_ideas":         [_serialize_item(v) for v in result.top_video_ideas],
+            "purchase_intent_signals": result.purchase_intent_signals,
+            "content_series":          result.content_series,
+            "risk_alerts":             result.risk_alerts,
+            "content_gaps":            [_serialize_item(g) for g in result.content_gaps],
+            "misconceptions":          [_serialize_item(m) for m in result.misconceptions],
+            "controversy_hotspots":    [_serialize_item(c) for c in result.controversy_hotspots],
+            "unanswered_questions":    [_serialize_item(q) for q in result.unanswered_questions],
         })
 
         logger.info(
@@ -131,6 +141,8 @@ async def _generate_async(video_id: str) -> None:
             misconceptions=len(result.misconceptions),
             controversies=len(result.controversy_hotspots),
             unanswered=len(result.unanswered_questions),
+            video_ideas=len(result.top_video_ideas),
+            purchase_signals=len(result.purchase_intent_signals),
         )
 
     except Exception as exc:

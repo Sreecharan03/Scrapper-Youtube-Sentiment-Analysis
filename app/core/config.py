@@ -146,7 +146,11 @@ class Settings(BaseSettings):
     )
     groq_model: str = Field(
         default="llama-3.1-8b-instant",
-        description="Groq model ID for comment classification",
+        description="Groq model ID for comment classification and per-item enrichment",
+    )
+    groq_strategic_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        description="Groq model ID for strategic layer (executive summary, video ideas) — requires stronger reasoning",
     )
 
     # ------------------------------------------------------------------ #

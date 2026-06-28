@@ -97,12 +97,19 @@ async def get_recommendations(
         )
 
     return RecommendationsResponse(
-        video_id             = video_id,
-        status               = doc["status"],
-        generated_at         = doc.get("generated_at"),
-        content_gaps         = doc.get("content_gaps", []),
-        misconceptions       = doc.get("misconceptions", []),
-        controversy_hotspots = doc.get("controversy_hotspots", []),
-        unanswered_questions = doc.get("unanswered_questions", []),
-        error                = doc.get("error"),
+        video_id                = video_id,
+        status                  = doc["status"],
+        generated_at            = doc.get("generated_at"),
+        executive_summary       = doc.get("executive_summary", ""),
+        audience_stage          = doc.get("audience_stage", ""),
+        audience_mood           = doc.get("audience_mood", ""),
+        top_video_ideas         = doc.get("top_video_ideas", []),
+        purchase_intent_signals = doc.get("purchase_intent_signals", []),
+        content_series          = doc.get("content_series", []),
+        risk_alerts             = doc.get("risk_alerts", []),
+        content_gaps            = doc.get("content_gaps", []),
+        misconceptions          = doc.get("misconceptions", []),
+        controversy_hotspots    = doc.get("controversy_hotspots", []),
+        unanswered_questions    = doc.get("unanswered_questions", []),
+        error                   = doc.get("error"),
     )

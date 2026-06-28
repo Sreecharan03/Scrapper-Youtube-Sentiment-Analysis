@@ -5,14 +5,21 @@ CRUD for the `recommendations` collection (Phase 3D).
 
 Schema per document:
 {
-  video_id:      str (unique)
-  status:        "processing" | "completed" | "failed"
-  generated_at:  datetime
-  content_gaps:  [...]
-  misconceptions: [...]
-  controversy_hotspots: [...]
-  unanswered_questions: [...]
-  error:         str | null
+  video_id:               str (unique)
+  status:                 "processing" | "completed" | "failed"
+  generated_at:           datetime
+  executive_summary:      str
+  audience_stage:         str
+  audience_mood:          str
+  top_video_ideas:        [...]
+  purchase_intent_signals: [...]
+  content_series:         [...]
+  risk_alerts:            [...]
+  content_gaps:           [...]
+  misconceptions:         [...]
+  controversy_hotspots:   [...]
+  unanswered_questions:   [...]
+  error:                  str | null
 }
 """
 
@@ -58,15 +65,7 @@ class RecommendationRepository(BaseRepository):
         now = datetime.now(tz=timezone.utc)
         await self._collection.update_one(
             {"video_id": video_id},
-            {"$set": {
-                "status":               "completed",
-                "generated_at":         now,
-                "error":                None,
-                "content_gaps":         data.get("content_gaps", []),
-                "misconceptions":       data.get("misconceptions", []),
-                "controversy_hotspots": data.get("controversy_hotspots", []),
-                "unanswered_questions": data.get("unanswered_questions", []),
-            }},
+            {"$set": {"status": "completed", "generated_at": now, "error": None, **data}},
             upsert=True,
         )
         logger.info("recommendations_completed", video_id=video_id)

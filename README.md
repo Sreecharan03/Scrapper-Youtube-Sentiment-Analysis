@@ -1,20 +1,20 @@
-# YouTube Audience Intelligence Platform
+# Sighnal — AI Content Strategist for YouTube Creators
 
-Scrapes every comment (top-level + replies) from any YouTube video using YouTube's internal Innertube API — no API key, no quota limits — then runs a full NLP + LLM analysis pipeline to surface audience intent, topic clusters, content gaps, misconceptions, and actionable recommendations for educational creators.
+Scrapes every comment (top-level + replies) from any YouTube video using YouTube's internal Innertube API — no API key, no quota limits — then runs a full NLP + LLM analysis pipeline to surface audience intent, topic clusters, content gaps, misconceptions, and actionable video recommendations. Results served via a single aggregated dashboard API.
 
-## Features
+---
 
-- **Zero-quota scraping** — YouTube Innertube `/youtubei/v1/next` API; handles 10K+ comment threads
-- **Multi-language transcripts** — fetches captions via `youtube-transcript-api` (manual → auto → any)
-- **LLM video summary** — two-call pipeline (draft → self-critique) with prompt caching; extracts key topics, claims, controversy triggers, video promises
-- **Comment classification** — Groq `llama-3.1-8b-instant`; 8 intent labels + sentiment + `answered_by_video` flag
-- **Preprocessing pipeline** — emoji → Unicode, pure-number filter, punctuation normalization, reply relevance filter
-- **BERTopic clustering** — UMAP + HDBSCAN + CountVectorizer; auto-adjusts cluster size, reduces outliers, labels clusters via Groq few-shot prompting
-- **Content gap detection** — cosine similarity of cluster labels vs video key topics/claims; surfaces uncovered audience demand
-- **Audience recommendations** — ranked content gaps, misconception map, controversy hotspots, top unanswered questions; enriched with chain-of-thought LLM analysis
-- **Per-intent audience summaries** — one LLM call generates 2-3 sentence creator-ready summaries for all 8 intent categories + overall video summary; cached in MongoDB
-- **Auto-retry** — up to 3 automatic retry rounds on classification failures
-- **Async + distributed** — FastAPI + Celery (two queues) + local MongoDB + Redis
+## What It Does
+
+A creator pastes a YouTube URL. The platform:
+
+1. Scrapes all comments (handles 10K+ threads, resumes after crashes)
+2. Fetches the transcript and generates a structured video summary
+3. Classifies every comment by intent (question / praise / criticism / misconception / etc.) and sentiment
+4. Clusters comments into topic groups using BERTopic
+5. Detects content gaps, misconceptions, controversy hotspots, and unanswered questions
+6. Generates ranked video ideas backed by real comment demand
+7. Serves everything through one dashboard endpoint — health score, opportunity score, risk score, top 3 video ideas, intent tabs, and deep-dive analysis
 
 ---
 
@@ -23,13 +23,14 @@ Scrapes every comment (top-level + replies) from any YouTube video using YouTube
 | Layer | Technology |
 |---|---|
 | API | FastAPI + Uvicorn |
-| Task queue | Celery (`scraper` + `replies` queues) |
+| Task queue | Celery (`scraper` + `replies` + `recommendations` queues) |
 | Database | MongoDB (local, persistent path) |
 | Cache / broker | Redis |
-| Scraping | aiohttp + YouTube Innertube API |
+| Scraping | aiohttp + YouTube Innertube API (no official API key) |
 | Transcript | `youtube-transcript-api` v1.x |
-| LLM summary & intent summaries | Anthropic Claude Haiku |
-| Comment classification & cluster labeling | Groq `llama-3.1-8b-instant` |
+| LLM summary + intent summaries | Anthropic Claude Haiku (`claude-haiku-4-5-20251001`) |
+| Strategic recommendations | Groq `llama-3.3-70b-versatile` |
+| Classification + cluster labeling + enrichment | Groq `llama-3.1-8b-instant` |
 | Topic clustering | `bertopic==0.17.4` + UMAP + HDBSCAN |
 | Embeddings | `sentence-transformers` `all-MiniLM-L6-v2` (384-dim) |
 
@@ -43,24 +44,27 @@ Phase 2  — Comment scraping pipeline            ✅ Complete
 Phase 3A — Transcript + LLM summary             ✅ Complete
 Phase 3B — Comment classification               ✅ Complete
 Phase 3C — BERTopic topic clustering            ✅ Complete
-Phase 3D — Gap analysis + recommendations       ✅ Complete
+Phase 3D — Gap analysis + recommendations       ✅ Complete (production-grade prompts)
 Phase 3E — Per-intent audience summaries        ✅ Complete
-Phase 3F — Dashboard API endpoints              🔜 Next
-Phase 3G — React / Next.js dashboard            🔜 Planned
+Phase 3F — Dashboard aggregation API            ✅ Complete
+Phase 3G — React / Next.js Sighnal UI           🔜 Next
+Phase 4  — Channel-level cross-video analysis   🔜 Planned
 ```
 
-### Results (eye health video — 3,569 comments)
+### Results on test video (eye health — 3,569 comments)
 
 | Metric | Value |
 |---|---|
-| Total comments scraped | 3,569 |
-| Classified | 3,092 (86.6%) |
-| Topic clusters found | 13 |
-| Content gaps detected | 1 (Astigmatism — 76% questions, 50 comments) |
-| Controversy hotspots | 1 (LED Safety — 73.1% criticism, 49 comments) |
+| Comments scraped | 3,569 |
+| Classified | 3,082 (86.3%) |
+| Topic clusters | 13 |
+| Content gaps | 1 (Astigmatism — 76% questions) |
+| Controversy hotspots | 1 (LED Safety — 73% criticism, 805-like top comment) |
 | Misconception clusters | 5 |
-| Top intent | Praise 41.7% |
-| Positive sentiment | 47.4% |
+| Audience health score | 69 / 100 |
+| Opportunity score | 95 / 100 |
+| Risk score | 11 / 100 |
+| Top praise | 41.2% of classified comments |
 
 ---
 
@@ -80,10 +84,13 @@ app/
 │       │   ├── analysis.py              # classification + retry + results
 │       │   ├── clusters.py              # BERTopic clustering (3C)
 │       │   ├── recommendations.py       # gap analysis + recommendations (3D)
-│       │   └── intent_summaries.py      # per-intent audience summaries (3E)
+│       │   ├── intent_summaries.py      # per-intent audience summaries (3E)
+│       │   └── dashboard.py             # aggregated dashboard endpoint (3F)
 │       └── schemas/
+│           ├── recommendations.py
+│           └── dashboard.py             # DashboardResponse with all sections
 ├── core/
-│   ├── config.py
+│   ├── config.py                        # groq_model + groq_strategic_model
 │   └── logging.py
 ├── db/
 │   ├── init_db.py
@@ -94,9 +101,10 @@ app/
 │       ├── recommendation_repo.py
 │       └── intent_summary_repo.py
 ├── services/
-│   ├── classifier.py                    # Groq batched comment classifier
+│   ├── classifier.py                    # Groq batched comment classifier (3B)
 │   ├── clustering_service.py            # BERTopic pipeline (3C)
-│   ├── recommendation_service.py        # gap analysis engine (3D)
+│   ├── recommendation_service.py        # two-model Groq strategy engine (3D)
+│   ├── dashboard_service.py             # score computation + aggregation (3F)
 │   ├── intent_summary_service.py        # per-intent LLM summaries (3E)
 │   ├── relevance_filter.py              # all-MiniLM-L6-v2 reply filter
 │   ├── text_preprocessor.py
@@ -110,9 +118,9 @@ app/
         ├── transcript_tasks.py
         ├── summary_tasks.py
         ├── classification_tasks.py
-        ├── clustering_tasks.py          # cluster_comments (3C)
-        ├── recommendation_tasks.py      # generate_recommendations (3D)
-        └── intent_summary_tasks.py      # generate_intent_summaries (3E)
+        ├── clustering_tasks.py
+        ├── recommendation_tasks.py
+        └── intent_summary_tasks.py
 ```
 
 ---
@@ -121,11 +129,11 @@ app/
 
 ### Prerequisites
 
-- Python 3.12 (conda env: `cloudspace`)
+- Python 3.12
 - MongoDB (local)
 - Redis
 
-### Install dependencies
+### Install
 
 ```bash
 pip install -r requirements.txt
@@ -133,10 +141,8 @@ pip install -r requirements.txt
 
 ### Environment variables
 
-Copy `.env.example` to `.env` and fill in:
-
 ```env
-# MongoDB (local)
+# MongoDB
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB_NAME=yt_scraper
 
@@ -144,13 +150,16 @@ MONGODB_DB_NAME=yt_scraper
 REDIS_HOST=your-redis-host
 REDIS_PORT=6379
 
-# Anthropic (Phase 3A summary + Phase 3E intent summaries)
+# Anthropic — summary (3A) + intent summaries (3E)
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 
-# Groq (Phase 3B classification + Phase 3C cluster labeling)
+# Groq — classification (3B), cluster labeling (3C), enrichment (3D)
 GROQ_API_KEY=gsk_...
 GROQ_MODEL=llama-3.1-8b-instant
+
+# Groq — strategic recommendations layer (3D) — stronger reasoning
+GROQ_STRATEGIC_MODEL=llama-3.3-70b-versatile
 ```
 
 ---
@@ -165,22 +174,22 @@ mongod --dbpath /teamspace/studios/this_studio/.mongodb/data \
        --fork
 ```
 
-### 2. Start Celery workers
-
-Both queues required — `replies` handles reply-batch tasks:
+### 2. Start Celery worker (all 3 queues required)
 
 ```bash
-python3 -m celery -A app.workers.celery_app worker \
-       -Q scraper,replies \
-       --concurrency=4 \
+celery -A app.workers.celery_app worker \
+       -Q scraper,replies,recommendations \
+       --concurrency=2 \
        --loglevel=INFO
 ```
 
 ### 3. Start FastAPI
 
 ```bash
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+> ⚠️ Redis free tier caps at 30 connections. Kill the Celery worker before restarting uvicorn if Redis refuses connection.
 
 ---
 
@@ -189,57 +198,62 @@ python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
 ### Scraping
 
 ```
-POST /api/v1/jobs                              Submit scrape job for a video URL
-GET  /api/v1/jobs/{job_id}                     Job status + progress
-GET  /api/v1/comments?video_id=...             List scraped comments
-GET  /api/v1/videos/{video_id}                 Video metadata
+POST /api/v1/jobs                                Submit scrape job for a video URL
+GET  /api/v1/jobs/{job_id}                       Job status + progress
+GET  /api/v1/comments?video_id=...               List scraped comments
 ```
 
 ### Phase 3A — Transcript + Summary
 
 ```
-POST /api/v1/transcripts/{video_id}            Fetch transcript (multi-language)
-GET  /api/v1/transcripts/{video_id}            Get stored transcript
-POST /api/v1/summaries/{video_id}              Generate LLM video summary
-GET  /api/v1/summaries/{video_id}              Get stored summary
+POST /api/v1/transcripts/{video_id}              Fetch transcript (manual → auto → any language)
+GET  /api/v1/transcripts/{video_id}              Get stored transcript
+POST /api/v1/summaries/{video_id}                Generate LLM video summary (draft → self-critique)
+GET  /api/v1/summaries/{video_id}                Get stored summary
 ```
 
 ### Phase 3B — Classification
 
 ```
-POST /api/v1/analysis/{video_id}/classify      Classify all comments (auto-retries 3x)
+POST /api/v1/analysis/{video_id}/classify        Classify all comments (auto-retries 3x)
 POST /api/v1/analysis/{video_id}/classify/retry  Retry only failed comments
-GET  /api/v1/analysis/{video_id}               Get intent + sentiment breakdown
+GET  /api/v1/analysis/{video_id}                 Intent + sentiment breakdown
 ```
 
 ### Phase 3C — Topic Clustering
 
 ```
-POST /api/v1/clusters/{video_id}               Run BERTopic clustering
-GET  /api/v1/clusters/{video_id}/status        Clustering job status
-GET  /api/v1/clusters/{video_id}               All clusters sorted by size
-GET  /api/v1/clusters/{video_id}/{cluster_id}  Single cluster detail
+POST /api/v1/clusters/{video_id}                 Run BERTopic clustering
+GET  /api/v1/clusters/{video_id}/status          Clustering job status
+GET  /api/v1/clusters/{video_id}                 All clusters sorted by size
+GET  /api/v1/clusters/{video_id}/{cluster_id}    Single cluster detail
 ```
 
 ### Phase 3D — Recommendations
 
 ```
-POST /api/v1/recommendations/{video_id}        Generate audience recommendations
-GET  /api/v1/recommendations/{video_id}/status Job status
-GET  /api/v1/recommendations/{video_id}        Full recommendations result
+POST /api/v1/recommendations/{video_id}          Generate recommendations (two-model Groq pipeline)
+GET  /api/v1/recommendations/{video_id}/status   Job status
+GET  /api/v1/recommendations/{video_id}          Full result — video ideas, gaps, misconceptions, controversies
 ```
 
 ### Phase 3E — Intent Summaries
 
 ```
-POST /api/v1/intent-summaries/{video_id}        Generate per-intent summaries (cached)
-GET  /api/v1/intent-summaries/{video_id}/status Job status
-GET  /api/v1/intent-summaries/{video_id}        All 8 intent summaries + overall
+POST /api/v1/intent-summaries/{video_id}         Generate per-intent summaries (cached)
+GET  /api/v1/intent-summaries/{video_id}/status  Job status
+GET  /api/v1/intent-summaries/{video_id}         All 8 intent summaries + overall summary
+```
+
+### Phase 3F — Dashboard
+
+```
+GET  /api/v1/dashboard/{video_id}                Full aggregated dashboard — one call, everything
 ```
 
 ---
 
-### Full pipeline for a new video
+## Full Pipeline (new video)
 
 ```bash
 VIDEO_ID="nCnZX8zs4LI"
@@ -264,14 +278,49 @@ curl -X POST $BASE/api/v1/clusters/$VIDEO_ID
 curl -X POST $BASE/api/v1/recommendations/$VIDEO_ID
 curl -X POST $BASE/api/v1/intent-summaries/$VIDEO_ID
 
-# 6. Fetch results
-curl $BASE/api/v1/recommendations/$VIDEO_ID | python3 -m json.tool
-curl $BASE/api/v1/intent-summaries/$VIDEO_ID | python3 -m json.tool
+# 6. Dashboard — everything in one call
+curl $BASE/api/v1/dashboard/$VIDEO_ID | python3 -m json.tool
 ```
 
 ---
 
 ## Analysis Pipeline
+
+### Phase 3D — Recommendation Engine (Two-Model Architecture)
+
+```
+Call 1 — Strategic layer (llama-3.3-70b-versatile)
+  · Quoted data block: all numbers injected verbatim — model cannot hallucinate stats
+  · Server-side slot enumeration: _select_video_slots() pre-selects top 5 clusters
+    by demand signal (gap clusters first, then highest question_count)
+    LLM converts each slot to a video idea — it does not choose which clusters
+  · CoT scratchpad: model fills "reasoning" field before committing to answers
+  · Verification field: model echoes back locked stats; server validates against actual data
+  · Output: executive_summary, audience_stage, audience_mood, top_video_ideas (5),
+    purchase_intent_signals, content_series, risk_alerts
+
+Call 2 — Per-item enrichment (llama-3.1-8b-instant)
+  · Generates what_to_do / why / suggested_hook / urgency / impact_type per finding
+  · Misconception hooks anchored to KEY CLAIMS only — no external science added
+  · Controversy hooks never cite specific journal names or publication years
+  · Urgency calibrated to comment count: ≥100=high, 20-99=medium, <20=low
+```
+
+### Phase 3F — Dashboard Scores
+
+Three scores computed server-side from classification data — no LLM calls:
+
+```
+health_score      = positive_pct × 0.50
+                  + (100 - misconception_pct) × 0.30
+                  + (100 - criticism_pct) × 0.20
+
+opportunity_score = top video idea's demand_score (0–100)
+                    calibrated by 70b model against slot demand signals
+
+risk_score        = criticism_pct × 0.60
+                  + misconception_pct × 0.40
+```
 
 ### Phase 3C — BERTopic Clustering
 
@@ -280,36 +329,19 @@ Filter + dedup (spam, len<20, text_hash dedup)
   ↓
 Embed (all-MiniLM-L6-v2)
   ↓
-BERTopic: UMAP(n_components=5, cosine) + HDBSCAN(min_size=dynamic) + CountVectorizer(stop_words=english, ngram=(1,2))
+BERTopic:
+  UMAP(n_neighbors=15, n_components=5, min_dist=0, metric=cosine, seed=42)
+  HDBSCAN(min_cluster_size=max(10, n//80), min_samples=5, prediction_data=True)
+  CountVectorizer(stop_words=english, min_df=2, ngram_range=(1,2))
   ↓
-Auto-adjust: outlier_ratio > 35% → reduce min_cluster_size × 0.7, refit
+Auto-adjust: outlier_ratio > 35% → min_cluster_size × 0.7, refit (max 2 rounds)
   ↓
-reduce_outliers(strategy=embeddings)   ← NEVER call update_topics() after this
+reduce_outliers(strategy=embeddings)   ← never call update_topics() after this
   ↓
 Groq few-shot labeling (5 domain examples + video context, temp=0.2)
   ↓
-Gap detection: cosine_sim(cluster_label, key_topics + key_claims) < 0.35 → is_content_gap=True
+Gap detection: cosine_sim(cluster_label, key_topics + key_claims) < 0.35 → content gap
 ```
-
-### Phase 3D — Recommendations
-
-Four analysis types, all from existing MongoDB data — no new models:
-
-| Type | Signal | Filter |
-|---|---|---|
-| Content gaps | `is_content_gap=True` OR `question_pct > 40% AND gap_sim < 0.42` | Skip fan clusters (praise > 50%) |
-| Misconceptions | misconception-labeled comments grouped by cluster | Skip fan clusters, min text length 30 chars |
-| Controversy hotspots | `criticism_pct > 25%` AND dominant sentiment ≠ positive | Match against `summary.controversy_triggers` via embedding |
-| Unanswered questions | `answered_by_video=False`, sorted by like_count | Skip fan clusters |
-
-All findings enriched with one Groq call using expert persona + chain-of-thought + few-shot examples.
-
-### Phase 3E — Intent Summaries
-
-One LLM call per video generates:
-- **8 intent summaries** (question, praise, criticism, confusion, misconception, request — via LLM; spam + off_topic — static count lines)
-- **1 overall summary** — 3-sentence arc of dominant feeling, #1 audience need, and risk
-- Cached in MongoDB — re-triggers only if comment count grows > 10%
 
 ---
 
@@ -317,31 +349,33 @@ One LLM call per video generates:
 
 | Collection | Purpose |
 |---|---|
-| `comments` | All TLCs and replies, flat structure |
-| `jobs` | One doc per scrape job with progress tracking |
+| `comments` | All TLCs and replies with intent_labels, sentiment, cluster_id |
+| `jobs` | Scrape job lifecycle + progress |
 | `scrape_batches` | Per-batch checkpoint state |
 | `scrape_sessions` | Resume tokens for interrupted scrapes |
 | `comment_history` | Edit detection archive |
 | `failed_replies` | Reply batches that exhausted all retries |
 | `transcripts` | Video transcripts (all languages) |
-| `summaries` | LLM-generated video summaries |
-| `comment_analysis` | Aggregate classification stats per video |
+| `summaries` | LLM-generated video summaries with key_claims + controversy_triggers |
+| `comment_analysis` | Aggregate intent + sentiment breakdown per video |
 | `reports` | Clean client-facing export per video |
-| `clusters` | One doc per topic cluster (3C) |
-| `cluster_info` | Clustering job state + metadata (3C) |
-| `recommendations` | Gap analysis + recommendation results (3D) |
-| `intent_summaries` | Per-intent LLM summaries, cached (3E) |
+| `clusters` | One doc per topic cluster with top_comments + intent_breakdown |
+| `cluster_info` | Clustering job status + metadata |
+| `recommendations` | Video ideas, gaps, misconceptions, controversies, strategic layer |
+| `intent_summaries` | Per-intent LLM summaries, cached (re-triggers on >10% comment growth) |
 
 ---
 
 ## Key Engineering Notes
 
-- **YouTube scraping**: Uses Innertube `/youtubei/v1/next` with ViewModel+mutations format (2024+). The old `commentRenderer` format is legacy and misses most comments on modern videos. Install `Brotli` — YouTube returns brotli-encoded responses.
-- **BERTopic keyword quality**: Never call `update_topics()` after `reduce_outliers()`. It forces a full c-TF-IDF recompute on enlarged clusters, causing stop words to dominate keywords. Preserve the original `fit_transform` representations.
-- **numpy → MongoDB**: BERTopic returns `numpy.int64` / `numpy.float64`. PyMongo rejects them — wrap every BERTopic output with `int()` / `float()` before storing.
-- **Fan cluster filtering**: BERTopic may type fan praise clusters as "topic". Filter any cluster with praise > 50% from content gap, misconception, and unanswered question analysis in the recommendation layer — do not re-cluster.
-- **Groq 8b + JSON**: Use `response_format={"type": "json_object"}` — the model wraps output in markdown fences without it. Wrap output schema in a root object, not a bare array.
-- **Managed Redis**: Only DB 0 is available on Redis Cloud free tier; max 30 connections. Use `BlockingConnectionPool(max_connections=1)` per Celery task.
-- **MongoDB path on Lightning AI**: `/data/db` is ephemeral and wiped on restart. Always use `/teamspace/studios/this_studio/.mongodb/data`.
-- **Celery queues**: Both `-Q scraper,replies` are required. Reply batch tasks route to `replies` queue — starting only `-Q scraper` leaves all reply fetching stuck at 0%.
-- **uvicorn entry point**: `main.py` is at project root. Use `uvicorn main:app`, not `uvicorn app.main:app`.
+- **YouTube scraping**: Innertube `/youtubei/v1/next` with ViewModel+mutations format (2024+). Old `commentRenderer` format is legacy. Install `Brotli` — YouTube returns brotli-encoded responses.
+- **BERTopic keyword quality**: Never call `update_topics()` after `reduce_outliers()`. It forces c-TF-IDF recompute on enlarged clusters, causing stop words to dominate keywords.
+- **numpy → MongoDB**: BERTopic returns `numpy.int64`/`float64`. PyMongo rejects them — wrap every BERTopic output with `int()`/`float()` before storing.
+- **Fan cluster filtering**: BERTopic types fan praise clusters as "topic". Filter clusters with praise > 50% from all recommendation analysis — do not re-cluster.
+- **Groq 8b + JSON**: Always use `response_format={"type": "json_object"}`. Model wraps output in markdown fences without it.
+- **Two-model Groq**: Run strategic call (70b) first, enrichment call (8b) second — sequentially. Concurrent calls hit rate limits and one fails silently.
+- **mark_completed**: Always use `**data` spread in `update_one($set)`. A hardcoded field list silently drops any new fields added to the result.
+- **Managed Redis**: Only DB 0 on Redis Cloud free tier; max 30 connections. Use `BlockingConnectionPool(max_connections=1)` per task and kill Celery before restarting uvicorn.
+- **MongoDB path on Lightning AI**: `/data/db` is ephemeral. Always use `/teamspace/studios/this_studio/.mongodb/data`.
+- **Celery queues**: All three required — `-Q scraper,replies,recommendations`. Recommendations route to their own queue to avoid blocking scraper tasks.
+- **uvicorn entry point**: `uvicorn main:app` not `uvicorn app.main:app`.
